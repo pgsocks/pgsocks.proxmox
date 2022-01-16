@@ -1,0 +1,10 @@
+namespace: pgsocks
+name: proxmox
+version: 0.1.0
+readme: README.md
+authors:
+  - Programming Socks <pgsocks@pm.me>
+tags:
+  - collection
+  - proxmox
+repository: https://www.github.com/pgsocks/ansible-proxmox
