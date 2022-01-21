@@ -4,43 +4,18 @@ name: qemu
 short_description: Proxmox QEMU agent connection
 description:
   - Execute Ansible tasks via QEMU agent connection in Proxmox API
+extends_documentation_fragment: pgsocks.proxmox.proxmox
 options:
   vmid:
     description: Agent hostname/vmid to connect to
+    required: yes
     vars:
       - name: proxmox_vmid
   node:
     description: Proxmox node that hosts given agent
+    required: yes
     vars:
       - name: proxmox_node
-  host:
-    description: Hostname for Proxmox API url
-    required: yes
-    type: str
-    env:
-      - name: PROXMOX_HOST
-  user:
-    description: Proxmox user to authenticate as
-    required: yes
-    type: str
-    env:
-      - name: PROXMOX_USER
-  token:
-    description: Name of token to authenticate with
-    required: yes
-    type: str
-    env:
-      - name: PROXMOX_TOKEN
-  secret:
-    description: Token value to authenticate with
-    required: yes
-    type: str
-    env:
-      - name: PROXMOX_SECRET
-  verify_ssl:
-    description: Set C(no) to skip certificate validation
-    default: yes
-    type: bool
 """
 
 try:
@@ -84,7 +59,7 @@ class Connection(ConnectionBase):
             user = self.get_option("user"),
             token_name = self.get_option("token"),
             token_value = self.get_option("secret"),
-            verify_ssl = False #self.get_option("verify_ssl")
+            verify_ssl = self.get_option("verify_ssl")
         )
         self.node = self.get_option("node")
         self.vmid = self.get_option("vmid")

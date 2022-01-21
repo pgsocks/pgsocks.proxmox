@@ -17,6 +17,7 @@ description:
   - Proxmox inventory plugin.
   - Acquires hosts from Proxmox API
   - Uses configuration file ending with C(.proxmox.yml)
+extends_documentation_fragment: pgsocks.proxmox.proxmox
 options:
   plugin:
     description: Always C(pgsocks.proxmox.proxmox)
@@ -24,34 +25,6 @@ options:
     type: str
     choices:
       - pgsocks.proxmox.proxmox
-  host:
-    description: Hostname for Proxmox API url
-    required: yes
-    type: str
-    env:
-      - name: PROXMOX_HOST
-  user:
-    description: Proxmox user to authenticate as
-    required: yes
-    type: str
-    env:
-      - name: PROXMOX_USER
-  token:
-    description: Name of token to authenticate with
-    required: yes
-    type: str
-    env:
-      - name: PROXMOX_TOKEN
-  secret:
-    description: Token value to authenticate with
-    required: yes
-    type: str
-    env:
-      - name: PROXMOX_SECRET
-  verify_ssl:
-    description: Set C(no) to skip certificate validation
-    default: yes
-    type: bool
 """
 
 class InventoryModule(BaseInventoryPlugin):
