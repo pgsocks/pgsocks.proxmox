@@ -24,7 +24,7 @@ try:
 except ImportError:
     IMPORT_ERROR = True
 
-from ansible.errors import AnsibleError
+from ansible.errors import AnsibleError, AnsibleConnectionFailure
 from ansible.plugins.connection import ConnectionBase
 from ansible.plugins.shell.powershell import _parse_clixml
 from ansible.module_utils._text import to_bytes, to_native, to_text
@@ -53,6 +53,10 @@ class Connection(ConnectionBase):
 
         if IMPORT_ERROR:
             raise AnsibleError("This module requires Requests and Proxmoxer")
+
+        if not getattr(self._shell, "_IS_WINDOWS", False):
+            raise AnsibleConnectionFailure (
+                f"{self.transport} currently only supports Windows" )
 
         self.session = proxmoxer.ProxmoxAPI (
             self.get_option("host"),
