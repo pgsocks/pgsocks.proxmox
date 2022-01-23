@@ -59,68 +59,42 @@ class InventoryModule(BaseInventoryPlugin):
             verify_ssl = self.get_option("verify_ssl")
         )
 
-        qemu_group = "proxmox_qemu"
-        self.inventory.add_group(qemu_group)
-        lxc_group = "proxmox_lxc"
-        self.inventory.add_group(lxc_group)
-        running_group = "proxmox_running"
-        self.inventory.add_group(running_group)
-        guest_group = "proxmox_guest"
-        self.inventory.add_group(guest_group)
-        self.inventory.add_child(guest_group, qemu_group)
-        self.inventory.add_child(guest_group, lxc_group)
-        self.inventory.add_child(guest_group, running_group)
-        self.inventory.set_variable (
-            guest_group,
-            "ansible_proxmox_host",
-            self.get_option("host") )
-        self.inventory.set_variable (
-            guest_group,
-            "ansible_proxmox_user",
-            self.get_option("user") )
-        self.inventory.set_variable (
-            guest_group,
-            "ansible_proxmox_token",
-            self.get_option("token") )
-        self.inventory.set_variable (
-            guest_group,
-            "ansible_proxmox_secret",
-            self.get_option("secret") )
-        self.inventory.set_variable (
-            guest_group,
-            "ansible_proxmox_verify_ssl",
-            self.get_option("verify_ssl") )
+        self.inventory.add_group("proxmox_guest")
+        for option in ("host", "user", "token", "secret", "verify_ssl"):
+            self.inventory.set_variable (
+                "proxmox_guest",
+                f"ansible_proxmox_{option}",
+                self.get_option(option) )
+        for group in ("lxc", "qemu", "running"):
+            self.inventory.add_group(f"proxmox_{group}")
+            self.inventory.add_child("proxmox_guest", f"proxmox_{group}")
 
-        for node in session.get("nodes"):
-            for vm in session.get(f"nodes/{node['node']}/qemu"):
-                if vm["template"]:
-                    continue
-                self.inventory.add_host(vm["name"])
-                self.inventory.add_child(qemu_group, vm["name"])
-                self.inventory.set_variable(vm["name"], f"proxmox_node", node["node"])
-                for key, val in vm.items():
-                    self.inventory.set_variable(vm["name"], f"proxmox_{key}", val)
-                if self.get_option("config_facts"):
-                    for key, val in session.get(f"nodes/{node['node']}/qemu/{vm['vmid']}/config").items():
-                        self.inventory.set_variable(vm["name"], f"proxmox_{key}", val)
-                if vm["status"] != "running":
-                    continue
-                self.inventory.add_child(running_group, vm["name"])
-                if self.get_option("agent_facts"):
-                    ifaces = session.get(f"nodes/{node['node']}/qemu/{vm['vmid']}/agent/network-get-interfaces")["result"]
-                    ifaces = [{"name" : iface["name"], "hwaddr" : iface.get("hardware-address", ""), "addresses" : [f"{ip['ip-address']}/{ip['prefix']}" for ip in iface.get("ip-addresses", [])]} for iface in ifaces]
-                    self.inventory.set_variable(vm["name"], f"proxmox_interfaces", ifaces)
+        hosts =  [
+            { "vmid" : host["vmid"],
+              "name" : host["name"],
+              "status" : host["status"],
+              "node" : node["node"],
+              "type" : proxmox_type }
+            for proxmox_type in ("qemu", "lxc")
+            for node in session.get("nodes")
+            for host in session.get(f"nodes/{node['node']}/{proxmox_type}") 
+            if not host["template"] ]
 
-            for lxc in session.get(f"nodes/{node['node']}/lxc"):
-                self.inventory.add_host(lxc["name"])
-                self.inventory.add_child(lxc_group, lxc["name"])
-                self.inventory.set_variable(lxc["name"], f"proxmox_node", node["node"])
-                for key, val in lxc.items():
-                    self.inventory.set_variable(lxc["name"], f"proxmox_{key}", val)
-                if self.get_option("config_facts"):
-                    for key, val in session.get(f"nodes/{node['node']}/lxc/{lxc['vmid']}/config").items():
-                        self.inventory.set_variable(lxc["name"], f"proxmox_{key}", val)
-                if lxc["status"] != "running":
+        for host in hosts:
+            self.inventory.add_host(host["name"])
+            self.inventory.add_child(f"proxmox_{host['type']}", host["name"])
+            if host["status"] != "running":
+                continue
+            self.inventory.add_child("proxmox_running", host["name"])
+            if self.get_option("config_facts"):
+                config = session.get(f"nodes/{host['node']}/{host['type']}/{host['vmid']}/config")
+                host.update(config)
+            if host["type"] == "qemu" and  self.get_option("agent_facts"):
+                ifaces = session.get(f"nodes/{node['node']}/qemu/{vm['vmid']}/agent/network-get-interfaces")["result"]
+                ifaces = [{"name" : iface["name"], "hwaddr" : iface.get("hardware-address", ""), "addresses" : [f"{ip['ip-address']}/{ip['prefix']}" for ip in iface.get("ip-addresses", [])]} for iface in ifaces]
+                self.inventory.set_variable(vm["name"], f"proxmox_interfaces", ifaces)
+            for key, val in host.items():
+                if key == "name":
                     continue
-                self.inventory.add_child(running_group, lxc["name"])
+                self.inventory.set_variable(host["name"], f"proxmox_{key}", val)
 
