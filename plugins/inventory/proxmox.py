@@ -1,4 +1,4 @@
-from ansible.plugins.inventory import BaseInventoryPlugin
+from ansible.plugins.inventory import BaseInventoryPlugin, Constructable
 from ansible.errors import AnsibleError
 
 try:
@@ -17,7 +17,9 @@ description:
   - Proxmox inventory plugin.
   - Acquires hosts from Proxmox API
   - Uses configuration file ending with C(.proxmox.yml)
-extends_documentation_fragment: pgsocks.proxmox.proxmox
+extends_documentation_fragment:
+  - pgsocks.proxmox.proxmox
+  - constructed
 options:
   plugin:
     description: Always C(pgsocks.proxmox.proxmox)
@@ -33,9 +35,10 @@ options:
     description: Gather QEMU guest agent facts.
     type: bool
     default: no
+  
 """
 
-class InventoryModule(BaseInventoryPlugin):
+class InventoryModule(BaseInventoryPlugin, Constructable):
 
     NAME = "pgsocks.proxmox.proxmox"
 
@@ -59,16 +62,6 @@ class InventoryModule(BaseInventoryPlugin):
             verify_ssl = self.get_option("verify_ssl")
         )
 
-        self.inventory.add_group("proxmox_guest")
-        for option in ("host", "user", "token", "secret", "verify_ssl"):
-            self.inventory.set_variable (
-                "proxmox_guest",
-                f"ansible_proxmox_{option}",
-                self.get_option(option) )
-        for group in ("lxc", "qemu", "running"):
-            self.inventory.add_group(f"proxmox_{group}")
-            self.inventory.add_child("proxmox_guest", f"proxmox_{group}")
-
         hosts =  [
             { "vmid" : host["vmid"],
               "name" : host["name"],
@@ -82,14 +75,10 @@ class InventoryModule(BaseInventoryPlugin):
 
         for host in hosts:
             self.inventory.add_host(host["name"])
-            self.inventory.add_child(f"proxmox_{host['type']}", host["name"])
-            if host["status"] != "running":
-                continue
-            self.inventory.add_child("proxmox_running", host["name"])
             if self.get_option("config_facts"):
                 config = session.get(f"nodes/{host['node']}/{host['type']}/{host['vmid']}/config")
                 host.update(config)
-            if host["type"] == "qemu" and  self.get_option("agent_facts"):
+            if host["type"] == "qemu" and self.get_option("agent_facts") and host["status"] == "running":
                 ifaces = session.get(f"nodes/{node['node']}/qemu/{vm['vmid']}/agent/network-get-interfaces")["result"]
                 ifaces = [{"name" : iface["name"], "hwaddr" : iface.get("hardware-address", ""), "addresses" : [f"{ip['ip-address']}/{ip['prefix']}" for ip in iface.get("ip-addresses", [])]} for iface in ifaces]
                 self.inventory.set_variable(vm["name"], f"proxmox_interfaces", ifaces)
@@ -97,4 +86,15 @@ class InventoryModule(BaseInventoryPlugin):
                 if key == "name":
                     continue
                 self.inventory.set_variable(host["name"], f"proxmox_{key}", val)
+            for option in ("host", "user", "token", "secret", "verify_ssl"):
+                self.inventory.set_variable (
+                    host["name"],
+                    f"ansible_proxmox_{option}",
+                    self.get_option(option) )
+
+            strict = self.get_option("strict")
+            host_vars = self.inventory.get_host(host["name"]).get_vars()
+            self._add_host_to_composed_groups(self.get_option("groups"), host_vars, host["name"], strict=strict)
+            self._add_host_to_keyed_groups(self.get_option("keyed_groups"), host_vars, host["name"], strict=strict)
+            self._set_composite_vars(self.get_option("compose"), host_vars, host["name"], strict=strict)
 
