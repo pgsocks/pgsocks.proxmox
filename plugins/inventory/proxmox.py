@@ -63,7 +63,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable):
         )
 
         hosts =  [
-            { "vmid" : host["vmid"],
+            { "vmid" : int(host["vmid"]),
               "name" : host["name"],
               "status" : host["status"],
               "node" : node["node"],
