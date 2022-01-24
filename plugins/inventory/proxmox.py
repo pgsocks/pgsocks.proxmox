@@ -35,7 +35,13 @@ options:
     description: Gather QEMU guest agent facts.
     type: bool
     default: no
-  
+  pass_connection_options:
+    description:
+      - Pass the connection options to each host's vars
+      - Convenient for connections or actions that need them.
+      - To avoid leaking sensitive data, this must be enabled conciously.
+    type: bool
+    default: no
 """
 
 class InventoryModule(BaseInventoryPlugin, Constructable):
@@ -86,11 +92,12 @@ class InventoryModule(BaseInventoryPlugin, Constructable):
                 if key == "name":
                     continue
                 self.inventory.set_variable(host["name"], f"proxmox_{key}", val)
-            for option in ("host", "user", "token", "secret", "verify_ssl"):
-                self.inventory.set_variable (
-                    host["name"],
-                    f"ansible_proxmox_{option}",
-                    self.get_option(option) )
+            if self.get_option("pass_connection_options"):
+                for option in ("host", "user", "token", "secret", "verify_ssl"):
+                    self.inventory.set_variable (
+                        host["name"],
+                        f"ansible_proxmox_{option}",
+                        self.get_option(option) )
 
             strict = self.get_option("strict")
             host_vars = self.inventory.get_host(host["name"]).get_vars()
