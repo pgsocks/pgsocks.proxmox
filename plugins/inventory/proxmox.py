@@ -91,6 +91,8 @@ class InventoryModule(BaseInventoryPlugin, Constructable):
             for key, val in host.items():
                 if key == "name":
                     continue
+                if type(val) == str and "," in val:
+                    val = dict(opt.split("=") for opt in val.split(",") if "=" in opt)
                 self.inventory.set_variable(host["name"], f"proxmox_{key}", val)
             if self.get_option("pass_connection_options"):
                 for option in ("host", "user", "token", "secret", "verify_ssl"):
