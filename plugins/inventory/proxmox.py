@@ -87,7 +87,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable):
             if host["type"] == "qemu" and self.get_option("agent_facts") and host["status"] == "running":
                 ifaces = session.get(f"nodes/{host['node']}/qemu/{host['vmid']}/agent/network-get-interfaces")["result"]
                 ifaces = [{"name" : iface["name"], "hwaddr" : iface.get("hardware-address", ""), "addresses" : [f"{ip['ip-address']}/{ip['prefix']}" for ip in iface.get("ip-addresses", [])]} for iface in ifaces]
-                self.inventory.set_variable(host["name"], "proxmox_interfaces", ifaces)
+                host["interfaces"] = ifaces
             for key, val in host.items():
                 if key == "name":
                     continue
@@ -98,11 +98,17 @@ class InventoryModule(BaseInventoryPlugin, Constructable):
                 if type(val) == str and "," in val:
                     val = dict(opt.split("=") for opt in val.split(",") if "=" in opt)
                     if key.startswith("net"):
+                        ip = val.pop("ip", None)
+                        if ip:
+                            val["addresses"] = [ip]
                         for model in ["virtio", "e1000", "rtl8139", "vmxnet3"]:
                             mac = val.pop(model, None)
                             if mac:
                                 val["hwaddr"] = mac
                                 val["model"] = model
+                        for iface in host.get("interfaces", []):
+                            if iface["hwaddr"] == val["hwaddr"]:
+                                val.update(iface)
                 self.inventory.set_variable(host["name"], f"proxmox_{key}", val)
             if self.get_option("pass_connection_options"):
                 for option in ("host", "user", "token", "secret", "verify_ssl"):
