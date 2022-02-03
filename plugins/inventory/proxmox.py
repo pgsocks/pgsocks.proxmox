@@ -85,14 +85,24 @@ class InventoryModule(BaseInventoryPlugin, Constructable):
                 config = session.get(f"nodes/{host['node']}/{host['type']}/{host['vmid']}/config")
                 host.update(config)
             if host["type"] == "qemu" and self.get_option("agent_facts") and host["status"] == "running":
-                ifaces = session.get(f"nodes/{node['node']}/qemu/{vm['vmid']}/agent/network-get-interfaces")["result"]
+                ifaces = session.get(f"nodes/{host['node']}/qemu/{host['vmid']}/agent/network-get-interfaces")["result"]
                 ifaces = [{"name" : iface["name"], "hwaddr" : iface.get("hardware-address", ""), "addresses" : [f"{ip['ip-address']}/{ip['prefix']}" for ip in iface.get("ip-addresses", [])]} for iface in ifaces]
-                self.inventory.set_variable(vm["name"], f"proxmox_interfaces", ifaces)
+                self.inventory.set_variable(host["name"], "proxmox_interfaces", ifaces)
             for key, val in host.items():
                 if key == "name":
                     continue
+                # Fix disk images since they have no key
+                if key.startswith(("rootfs", "virtio", "sata", "ide", "scsi")):
+                    val = f"image={val}"
+                # Fix qemu net devices since the model key is inconsistent
                 if type(val) == str and "," in val:
                     val = dict(opt.split("=") for opt in val.split(",") if "=" in opt)
+                    if key.startswith("net"):
+                        for model in ["virtio", "e1000", "rtl8139", "vmxnet3"]:
+                            mac = val.pop(model, None)
+                            if mac:
+                                val["hwaddr"] = mac
+                                val["model"] = model
                 self.inventory.set_variable(host["name"], f"proxmox_{key}", val)
             if self.get_option("pass_connection_options"):
                 for option in ("host", "user", "token", "secret", "verify_ssl"):
