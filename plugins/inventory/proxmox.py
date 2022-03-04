@@ -107,7 +107,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable):
                                 val["hwaddr"] = mac
                                 val["model"] = model
                         for iface in host.get("interfaces", []):
-                            if iface["hwaddr"] == val["hwaddr"]:
+                            if iface["hwaddr"].lower() == val["hwaddr"].lower():
                                 val.update(iface)
                 self.inventory.set_variable(host["name"], f"proxmox_{key}", val)
             if self.get_option("pass_connection_options"):
