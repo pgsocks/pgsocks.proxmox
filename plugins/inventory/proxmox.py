@@ -74,7 +74,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable):
               "status" : host["status"],
               "node" : node["node"],
               "type" : proxmox_type }
-            for proxmox_type in ("qemu", "lxc")
+            for proxmox_type in ("qemu", )
             for node in session.get("nodes")
             for host in session.get(f"nodes/{node['node']}/{proxmox_type}") 
             if not host.get("template") ]
