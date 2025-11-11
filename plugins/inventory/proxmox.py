@@ -77,7 +77,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable):
             for proxmox_type in ("qemu", "lxc")
             for node in session.get("nodes")
             for host in session.get(f"nodes/{node['node']}/{proxmox_type}") 
-            if not host["template"] ]
+            if not host.get("template") ]
 
         for host in hosts:
             self.inventory.add_host(host["name"])
