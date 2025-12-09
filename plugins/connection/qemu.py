@@ -18,16 +18,12 @@ options:
       - name: proxmox_node
 """
 
-try:
-    import proxmoxer
-    IMPORT_ERROR = False
-except ImportError:
-    IMPORT_ERROR = True
-
 from ansible.errors import AnsibleError, AnsibleConnectionFailure
 from ansible.plugins.connection import ConnectionBase
 from ansible.plugins.shell.powershell import _parse_clixml
 from ansible.module_utils._text import to_bytes, to_native, to_text
+from ansible.module_utils.urls import open_url
+from ansible.module_utils.six.moves.urllib.parse import urlencode
 from ansible.utils.hashing import secure_hash
 import os
 import json
@@ -38,6 +34,35 @@ class Connection(ConnectionBase):
     """ QEMU agent through Proxmox API connection """
 
     transport = "qemu"
+
+    def _api(self, method, path, **kwargs):
+
+        url = f"https://{self.host}:8006/api2/json{path}"
+        verify_ssl = self.get_option("verify_ssl")
+        body = json.dumps(kwargs) if kwargs else None
+        r = open_url (
+                url,
+                method=method,
+				data=body,
+				headers=self.request_headers,
+				validate_certs=verify_ssl )
+        return json.loads(r.read().decode("utf-8"))["data"]
+
+    def _post(self, path, **kwargs):
+
+        return self._api("POST", path, **kwargs)
+
+    def _get(self, path, **kwargs):
+
+        return self._api("GET", path, **kwargs)
+
+    def _put(self, path, **kwargs):
+
+        return self._api("PUT", path, **kwargs)
+
+    def _delete(self, path, **kwargs):
+
+        return self._api("DELETE", path, **kwargs)
 
     def __init__(self, *args, **kwargs):
 
@@ -51,23 +76,20 @@ class Connection(ConnectionBase):
 
     def _connect(self):
 
-        if IMPORT_ERROR:
-            raise AnsibleError("This module requires Requests and Proxmoxer")
-
         if not getattr(self._shell, "_IS_WINDOWS", False):
             raise AnsibleConnectionFailure (
                 f"{self.transport} currently only supports Windows" )
 
-        self.session = proxmoxer.ProxmoxAPI (
-            self.get_option("host"),
-            user = self.get_option("user"),
-            token_name = self.get_option("token"),
-            token_value = self.get_option("secret"),
-            verify_ssl = self.get_option("verify_ssl")
-        )
         self.node = self.get_option("node")
         self.vmid = self.get_option("vmid")
-        self.host = self._play_context.remote_addr
+        self.host = self.get_option("host")
+        token_name = self.get_option("token")
+        token_value = self.get_option("secret")
+        user = self.get_option("user")
+        self.request_headers = {
+                "Authorization": f"PVEAPIToken={user}!{token_name}={token_value}",
+                "Content-Type": "application/json"
+        }
 
         return self
 
@@ -78,21 +100,24 @@ class Connection(ConnectionBase):
         # Double encode command for safe API call
         cmd = self._shell._encode_script (
             cmd,
-            as_list = False,
+            as_list = True,
             strict_mode = False,
             preserve_rc = False )
         self._display.vvv(f"EXEC {cmd}", host=self.host)
 
         # POST execute request to Proxmox API
-        proc = self.session.post (
-            f"nodes/{self.node}/qemu/{self.vmid}/agent/exec",
+        proc = self._post (
+            f"/nodes/{self.node}/qemu/{self.vmid}/agent/exec",
             **{"command" : cmd, "input-data" : in_data} )
 
         # Poll process status for exit
         while True:
-            res = self.session.get (
-                f"nodes/{self.node}/qemu/{self.vmid}/agent/exec-status",
-                pid = proc["pid"] )
+            res = self._get (
+                "/nodes/{node}/qemu/{vmid}/agent/exec-status?{qs}".format(
+                    node = self.node,
+                    vmid = self.vmid,
+                    qs = urlencode({"pid": proc["pid"]})
+                ))
             self._display.vvvv(f"EXEC polling {proc['pid']}", host=self.host)
             if res["exited"]:
                 break
@@ -138,7 +163,7 @@ class Connection(ConnectionBase):
             BUFFER = 1024 * 32
             for chunk in iter(lambda: f.read(BUFFER), b''):
                 content = base64.b64encode(chunk) + b"\r\n"
-                self.exec_command(append_script, content, sudoable = False)
+                self.exec_command(append_script, content.decode("utf-8"), sudoable = False)
 
     def fetch_file(self, in_path, out_path):
 
