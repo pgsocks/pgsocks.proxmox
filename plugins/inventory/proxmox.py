@@ -1,12 +1,7 @@
 from ansible.plugins.inventory import BaseInventoryPlugin, Constructable
 from ansible.errors import AnsibleError
-
-try:
-    import requests
-    import proxmoxer
-    IMPORT_ERROR = False
-except ImportError:
-    IMPORT_ERROR = True
+from ansible.module_utils.urls import open_url
+import json
 
 __metaclass__ = type
 
@@ -48,25 +43,54 @@ class InventoryModule(BaseInventoryPlugin, Constructable):
 
     NAME = "pgsocks.proxmox.proxmox"
 
+    def _api(self, method, path, **kwargs):
+
+
+        host = self.get_option("host")
+        url = f"https://{host}:8006/api2/json{path}"
+        verify_ssl = self.get_option("verify_ssl")
+        body = json.dumps(kwargs) if kwargs else None
+        r = open_url (
+                url,
+                method=method,
+				data=body,
+				headers=self.request_headers,
+				validate_certs=verify_ssl )
+        return json.loads(r.read().decode("utf-8"))["data"]
+
+    def _post(self, path, **kwargs):
+
+        return self._api("POST", path, **kwargs)
+
+    def _get(self, path, **kwargs):
+
+        return self._api("GET", path, **kwargs)
+
+    def _put(self, path, **kwargs):
+
+        return self._api("PUT", path, **kwargs)
+
+    def _delete(self, path, **kwargs):
+
+        return self._api("DELETE", path, **kwargs)
+
     def verify_file(self, path):
 
         return super().verify_file(path) and path.endswith(".proxmox.yml")
 
     def parse(self, inventory, loader, path, cache):
 
-        if IMPORT_ERROR:
-            raise AnsibleError("This module requires Requests and Proxmoxer")
-
         super().parse(inventory, loader, path, cache)
+
         self._read_config_data(path)
 
-        session = proxmoxer.ProxmoxAPI (
-            self.get_option("host"),
-            user = self.get_option("user"),
-            token_name = self.get_option("token"),
-            token_value = self.get_option("secret"),
-            verify_ssl = self.get_option("verify_ssl")
-        )
+        token_name = self.get_option("token")
+        token_value = self.get_option("secret")
+        user = self.get_option("user")
+        self.request_headers = {
+                "Authorization": f"PVEAPIToken={user}!{token_name}={token_value}",
+                "Content-Type": "application/json"
+        }
 
         hosts =  [
             { "vmid" : int(host["vmid"]),
@@ -75,17 +99,17 @@ class InventoryModule(BaseInventoryPlugin, Constructable):
               "node" : node["node"],
               "type" : proxmox_type }
             for proxmox_type in ("qemu", )
-            for node in session.get("nodes")
-            for host in session.get(f"nodes/{node['node']}/{proxmox_type}") 
+            for node in self._get("/nodes")
+            for host in self._get(f"/nodes/{node['node']}/{proxmox_type}") 
             if not host.get("template") ]
 
         for host in hosts:
             self.inventory.add_host(host["name"])
             if self.get_option("config_facts"):
-                config = session.get(f"nodes/{host['node']}/{host['type']}/{host['vmid']}/config")
+                config = self._get(f"/nodes/{host['node']}/{host['type']}/{host['vmid']}/config")
                 host.update(config)
             if host["type"] == "qemu" and self.get_option("agent_facts") and host["status"] == "running":
-                ifaces = session.get(f"nodes/{host['node']}/qemu/{host['vmid']}/agent/network-get-interfaces")["result"]
+                ifaces = self._get(f"/nodes/{host['node']}/qemu/{host['vmid']}/agent/network-get-interfaces")["result"]
                 ifaces = [{"name" : iface["name"], "hwaddr" : iface.get("hardware-address", ""), "addresses" : [f"{ip['ip-address']}/{ip['prefix']}" for ip in iface.get("ip-addresses", [])]} for iface in ifaces]
                 host["interfaces"] = ifaces
             for key, val in host.items():
