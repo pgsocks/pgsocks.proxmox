@@ -4,8 +4,8 @@ Sice querrying and controlling Proxmox hosts through the API does not require
 any IP addresses or domain names, these plugins can be convenient for managing
 them even when offline or behind a firewall.
 
-Currently, only Windows hosts are supported through QEMU guest agent, and LXC
-is not implemented at all yet.
+Currently, Windows and Linux hosts are supported through QEMU guest agent, and
+LXC is not implemented at all yet.
 
 ## Plugins
 
@@ -41,11 +41,22 @@ export PROXMOX_SECRET=token_value
 ```
 
 Now, the inventory should be populated with QEMU and LXC hosts in Proxmox. Any
-Windows hosts with the QEMU guest agent service can be pinged using the
-connection plugin. LXC and Linux support coming soon!
+hosts with the QEMU guest agent service can be pinged using the connection
+plugin.
 
 ```bash
 ansible-inventory -i hosts.proxmox.yml --list
+ansible proxmox_qemu \
+-i hosts.proxmox.yml \
+-c pgsocks.proxmox.qemu \
+-m ping
+
+```
+
+For Windows guests, continue to use the Windows modules and shell settings, for
+example:
+
+```bash
 ansible proxmox_qemu \
 -i hosts.proxmox.yml \
 -c pgsocks.proxmox.qemu \
