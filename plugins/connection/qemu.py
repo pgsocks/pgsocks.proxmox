@@ -162,7 +162,7 @@ class Connection(ConnectionBase):
             raise AnsibleFileNotFound(f"{in_path} does not exist")
 
         # Escape remote path
-        out_path = self._shell._escape(self._shell._unquote(out_path))
+        out_path = self._escape_path(out_path)
         self._display.vvv(f"PUT {in_path} => {out_path}", host=self.host)
 
         if self.is_windows:
@@ -191,7 +191,7 @@ class Connection(ConnectionBase):
     def fetch_file(self, in_path, out_path):
 
         super().fetch_file(in_path, out_path)
-        in_path = self._shell._escape(self._shell._unquote(in_path))
+        in_path = self._escape_path(in_path)
         self._display.vvv(f"FETCH {out_path} <= {in_path}", host=self.host)
         BUFFER = 1024 * 32
 
@@ -258,3 +258,17 @@ class Connection(ConnectionBase):
 
     def close(self):
         self._connected = False
+
+    def _escape_path(self, path):
+        path = getattr(self._shell, "_unquote", lambda p: p)(path)
+
+        shell_escape = getattr(self._shell, "_escape", None)
+        if callable(shell_escape):
+            return shell_escape(path)
+
+        if self.is_windows:
+            return f"'{path.replace("'", "''")}'"
+
+        import shlex
+
+        return shlex.quote(path)
