@@ -1,4 +1,7 @@
-from ansible.plugins.inventory import BaseInventoryPlugin, Constructable
+from ansible.plugins.inventory import BaseInventoryPlugin
+from ansible.plugins.inventory import Constructable
+from ansible.plugins.inventory import Cacheable
+from ansible.utils.display import Display
 from ansible.errors import AnsibleError, AnsibleAuthenticationFailure
 from ansible.module_utils.urls import open_url
 from urllib.error import HTTPError
@@ -16,6 +19,7 @@ description:
 extends_documentation_fragment:
   - pgsocks.proxmox.proxmox
   - constructed
+  - inventory_cache
 options:
   plugin:
     description: Always C(pgsocks.proxmox.proxmox)
@@ -40,7 +44,7 @@ options:
     default: no
 """
 
-class InventoryModule(BaseInventoryPlugin, Constructable):
+class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
 
     NAME = "pgsocks.proxmox.proxmox"
 
@@ -84,9 +88,11 @@ class InventoryModule(BaseInventoryPlugin, Constructable):
 
         return super().verify_file(path) and path.endswith(".proxmox.yml")
 
-    def parse(self, inventory, loader, path, cache):
+    def parse(self, inventory, loader, path, cache=True):
 
-        super().parse(inventory, loader, path, cache)
+        super(InventoryModule, self).parse(inventory, loader, path)
+
+        display = Display()
 
         self._read_config_data(path)
 
@@ -98,16 +104,24 @@ class InventoryModule(BaseInventoryPlugin, Constructable):
                 "Content-Type": "application/json"
         }
 
-        hosts =  [
-            { "vmid" : int(host["vmid"]),
-              "name" : host["name"],
-              "status" : host["status"],
-              "node" : node["node"],
-              "type" : proxmox_type }
-            for proxmox_type in ("qemu", )
-            for node in self._get("/nodes")
-            for host in self._get(f"/nodes/{node['node']}/{proxmox_type}") 
-            if not host.get("template") ]
+        self.load_cache_plugin()
+        cache_key = self.get_cache_key(path)
+        cache = self.get_option("cache") and cache
+        hosts = self._cache.get(cache_key, None) if cache else None
+        if not hosts:
+            if cache:
+                display.vvv(f"Cache miss. Cache key: {cache_key}")
+            hosts = [
+                { "vmid" : int(host["vmid"]),
+                  "name" : host["name"],
+                  "status" : host["status"],
+                  "node" : node["node"],
+                  "type" : proxmox_type }
+                for proxmox_type in ("qemu", )
+                for node in self._get("/nodes")
+                for host in self._get(f"/nodes/{node['node']}/{proxmox_type}") 
+                if not host.get("template") ]
+            self._cache[cache_key] = hosts
 
         for host in hosts:
             self.inventory.add_host(host["name"])
