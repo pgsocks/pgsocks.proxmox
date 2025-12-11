@@ -18,7 +18,8 @@ options:
       - name: proxmox_node
 """
 
-from ansible.errors import AnsibleError, AnsibleConnectionFailure
+from ansible.errors import AnsibleFileNotFound
+from ansible.errors import AnsibleConnectionFailure
 from ansible.plugins.connection import ConnectionBase
 from ansible.plugins.shell.powershell import _parse_clixml
 from ansible.module_utils._text import to_bytes, to_native, to_text
@@ -143,7 +144,7 @@ class Connection(ConnectionBase):
 
         # Error out if source file does not exist
         if not os.path.exists(in_path):
-            raise AnsibleError(f"{in_path} does not exist")
+            raise AnsibleFileNotFound(f"{in_path} does not exist")
 
         # Escape remote path
         out_path = self._shell._escape(self._shell._unquote(out_path))
