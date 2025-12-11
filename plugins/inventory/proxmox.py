@@ -1,6 +1,7 @@
 from ansible.plugins.inventory import BaseInventoryPlugin, Constructable
-from ansible.errors import AnsibleError
+from ansible.errors import AnsibleError, AnsibleAuthenticationFailure
 from ansible.module_utils.urls import open_url
+from urllib.error import HTTPError
 import json
 
 __metaclass__ = type
@@ -50,12 +51,17 @@ class InventoryModule(BaseInventoryPlugin, Constructable):
         url = f"https://{host}:8006/api2/json{path}"
         verify_ssl = self.get_option("verify_ssl")
         body = json.dumps(kwargs) if kwargs else None
-        r = open_url (
-                url,
-                method=method,
-				data=body,
-				headers=self.request_headers,
-				validate_certs=verify_ssl )
+        try:
+            r = open_url (
+                    url,
+                    method=method,
+                    data=body,
+                    headers=self.request_headers,
+                    validate_certs=verify_ssl )
+        except HTTPError as e:
+            if e.code == 401:
+                raise AnsibleAuthenticationFailure(e.reason)
+            raise AnsibleConnectionFailure(e.reason)
         return json.loads(r.read().decode("utf-8"))["data"]
 
     def _post(self, path, **kwargs):
