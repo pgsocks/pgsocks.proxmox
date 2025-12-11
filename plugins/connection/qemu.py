@@ -18,8 +18,10 @@ options:
       - name: proxmox_node
 """
 
-from ansible.errors import AnsibleFileNotFound
+from ansible.errors import AnsibleAuthenticationFailure
 from ansible.errors import AnsibleConnectionFailure
+from ansible.errors import AnsibleError
+from ansible.errors import AnsibleFileNotFound
 from ansible.plugins.connection import ConnectionBase
 from ansible.plugins.shell.powershell import _parse_clixml
 from ansible.module_utils._text import to_bytes, to_native, to_text
@@ -77,15 +79,12 @@ class Connection(ConnectionBase):
 
         self.proxmox = None
         self.node = None
+        self.is_windows = getattr(self._shell, "_IS_WINDOWS", False)
         self.module_implementation_preferences = (".ps1", ".exe", "")
         self.allow_executable = False
         self.allow_extras = True
 
     def _connect(self):
-
-        if not getattr(self._shell, "_IS_WINDOWS", False):
-            raise AnsibleConnectionFailure (
-                f"{self.transport} currently only supports Windows" )
 
         self.node = self.get_option("node")
         self.vmid = self.get_option("vmid")
@@ -105,11 +104,7 @@ class Connection(ConnectionBase):
         super().exec_command(cmd, in_data, sudoable)
 
         # Double encode command for safe API call
-        cmd = self._shell._encode_script (
-            cmd,
-            as_list = True,
-            strict_mode = False,
-            preserve_rc = False )
+        cmd = self._encode_command(cmd)
         self._display.vvv(f"EXEC {cmd}", host=self.host)
 
         # POST execute request to Proxmox API
@@ -133,10 +128,30 @@ class Connection(ConnectionBase):
         stdout = to_bytes(res.get("out-data", ""))
         stderr = to_bytes(res.get("err-data", ""))
         exitcode = int(res.get("exitcode", 1))
-        if stderr.startswith(b"#< CLIXML"):
+        if self.is_windows and stderr.startswith(b"#< CLIXML"):
             stderr = _parse_clixml(stderr)
 
         return exitcode, stdout, stderr
+
+    def _encode_command(self, cmd):
+
+        if isinstance(cmd, (list, tuple)):
+            return list(cmd)
+
+        if self.is_windows:
+            return self._shell._encode_script (
+                cmd,
+                as_list = True,
+                strict_mode = False,
+                preserve_rc = False )
+
+        shell_executable = (
+            getattr(self._play_context, "executable", None)
+            or getattr(self._shell, "executable", None)
+            or "/bin/sh"
+        )
+
+        return [shell_executable, "-c", cmd]
 
     def put_file(self, in_path, out_path):
 
@@ -150,27 +165,28 @@ class Connection(ConnectionBase):
         out_path = self._shell._escape(self._shell._unquote(out_path))
         self._display.vvv(f"PUT {in_path} => {out_path}", host=self.host)
 
-        # Format script to assemble pieces of base64 encoded file
-        append_script = f"""
-            $path = '{out_path}'
-            $bytes = [System.Convert]::FromBase64String($input)
-            $fd = [System.IO.File]::OpenWrite($path)
-            $fd.Seek(0, 2)
-            $fd.Write($bytes, 0, $bytes.Length)
-            $fd.Close()
-        """
-        append_cmd = self._shell._encode_script (
-            append_script,
-            as_list=False,
-            strict_mode=False,
-            preserve_rc=True )
+        if self.is_windows:
+            # Format script to assemble pieces of base64 encoded file
+            append_script = f"""
+                $path = '{out_path}'
+                $bytes = [System.Convert]::FromBase64String($input)
+                $fd = [System.IO.File]::OpenWrite($path)
+                $fd.Seek(0, 2)
+                $fd.Write($bytes, 0, $bytes.Length)
+                $fd.Close()
+            """
+            append_cmd = append_script
+        else:
+            # Ensure the destination file starts empty
+            self.exec_command(f"> {out_path}", sudoable=False)
+            append_cmd = f"base64 -d >> {out_path}"
 
         # Send base64 encoded parts of file to be assembled remotely
         with open(in_path, "rb") as f:
             BUFFER = 1024 * 32
             for chunk in iter(lambda: f.read(BUFFER), b''):
                 content = base64.b64encode(chunk) + b"\r\n"
-                self.exec_command(append_script, content.decode("utf-8"), sudoable = False)
+                self.exec_command(append_cmd, content.decode("utf-8"), sudoable = False)
 
     def fetch_file(self, in_path, out_path):
 
@@ -178,40 +194,56 @@ class Connection(ConnectionBase):
         in_path = self._shell._escape(self._shell._unquote(in_path))
         self._display.vvv(f"FETCH {out_path} <= {in_path}", host=self.host)
         BUFFER = 1024 * 32
-        script = """
-            $path = '%(path)s'
-            If (Test-Path -Path $path -PathType Leaf)
-            {
-                $buffer_size = %(buffer)d
-                $offset = %(offset)d
 
-                $stream = New-Object -TypeName IO.FileStream($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
-                $stream.Seek($offset, [System.IO.SeekOrigin]::Begin) > $null
-                $buffer = New-Object -TypeName byte[] $buffer_size
-                $bytes_read = $stream.Read($buffer, 0, $buffer_size)
-                if ($bytes_read -gt 0) {
-                    $bytes = $buffer[0..($bytes_read - 1)]
-                    [System.Convert]::ToBase64String($bytes)
+        if self.is_windows:
+            script = """
+                $path = '%(path)s'
+                If (Test-Path -Path $path -PathType Leaf)
+                {
+                    $buffer_size = %(buffer)d
+                    $offset = %(offset)d
+
+                    $stream = New-Object -TypeName IO.FileStream($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+                    $stream.Seek($offset, [System.IO.SeekOrigin]::Begin) > $null
+                    $buffer = New-Object -TypeName byte[] $buffer_size
+                    $bytes_read = $stream.Read($buffer, 0, $buffer_size)
+                    if ($bytes_read -gt 0) {
+                        $bytes = $buffer[0..($bytes_read - 1)]
+                        [System.Convert]::ToBase64String($bytes)
+                    }
+                    $stream.Close() > $null
                 }
-                $stream.Close() > $null
-            }
-            ElseIf (Test-Path -Path $path -PathType Container)
-            {
-                Write-Host "[DIR]";
-            }
-            Else
-            {
-                Write-Error "$path does not exist";
-                Exit 1;
-            }
-        """
+                ElseIf (Test-Path -Path $path -PathType Container)
+                {
+                    Write-Host "[DIR]";
+                }
+                Else
+                {
+                    Write-Error "$path does not exist";
+                    Exit 1;
+                }
+            """
+        else:
+            script = """
+                path='%(path)s'
+                if [ -f "$path" ]; then
+                    dd if="$path" bs=1 skip=%(offset)d count=%(buffer)d 2>/dev/null | base64
+                elif [ -d "$path" ]; then
+                    echo "[DIR]"
+                else
+                    echo "$path does not exist" >&2
+                    exit 1
+                fi
+            """
+
         with open(out_path, "wb") as f:
             offset = 0
             while True:
-                cmd = self._shell._encode_script(script % {"buffer" : BUFFER, "path" : in_path, "offset" : offset}, as_list=False, preserve_rc=False)
-                status, stdout, stderr = self.exec_command(cmd)
+                rendered_cmd = script % {"buffer": BUFFER, "path": in_path, "offset": offset}
+
+                status, stdout, stderr = self.exec_command(rendered_cmd)
                 if status != 0:
-                    raise AnsiibleError(to_native(stderr))
+                    raise AnsibleError(to_native(stderr))
                 if stdout.strip() == "[DIR]":
                     data = None
                 else:
@@ -224,5 +256,5 @@ class Connection(ConnectionBase):
                         break
                     offset += len(data)
 
-    def close(sef):
+    def close(self):
         self._connected = False
